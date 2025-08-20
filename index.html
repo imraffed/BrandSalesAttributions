@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Foy Attribution Cross-Reference</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0c0f14; color: #e6edf3; margin: 0; }
+    .wrap { max-width: 900px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 26px; margin-bottom: 12px; }
+    .card { background: #11161d; border: 1px solid #1f2630; border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+    label { display: block; font-weight: bold; margin: 8px 0 4px; }
+    input[type="file"], input[type="text"] { width: 100%; background: #0b1117; color: #e6edf3; border: 1px solid #243040; border-radius: 8px; padding: 8px; }
+    button { padding: 10px 14px; border-radius: 8px; font-weight: bold; cursor: pointer; }
+    .btn-primary { background: #1f6feb; color: #fff; border: none; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #223047; padding: 8px; text-align: left; }
+    th { background: #0b1117; cursor: pointer; }
+    .hint { font-size: 12px; color: #c9d1d9; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Foy Attribution Cross-Reference</h1>
+    <p>Upload the attribution file and the daily dispensations file. The tool matches by order number and produces a list of employees attributed for sales of Foy products.</p>
+
+    <div class="card">
+      <label for="brandFilter">Brand filter</label>
+      <input id="brandFilter" type="text" value="Foy" />
+
+      <label for="attrFile">1) Kiosk attributions</label>
+      <input id="attrFile" type="file" accept=".csv,.xlsx,.xls" />
+
+      <label for="dispFile">2) Daily dispensations</label>
+      <input id="dispFile" type="file" accept=".csv,.xlsx,.xls" />
+
+      <button id="runBtn" class="btn-primary" style="margin-top:10px;">Analyze</button>
+      <button id="downloadBtn" class="btn-primary" disabled style="margin-left:8px;">Download CSV</button>
+      <span id="status" class="hint" style="margin-left:12px;"></span>
+    </div>
+
+    <div class="card">
+      <div id="resultsArea"><p class="hint">Results will appear here.</p></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script>
+    const q = (s, r=document) => r.querySelector(s);
+    const brandEl = q('#brandFilter');
+    const runBtn = q('#runBtn');
+    const dlBtn = q('#downloadBtn');
+    const resultsArea = q('#resultsArea');
+    const statusEl = q('#status');
+
+    function toStr(v){ return (v==null? '': String(v)).trim(); }
+    function norm(s){ return toStr(s).toLowerCase().trim(); }
+    // Canonicalize header keys: lowercase, remove spaces, underscores, hyphens, punctuation and BOM
+    function canon(s){
+      return toStr(s)
+        .replace(/^﻿/, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, '');
+    }
+
+    const ORDER_KEYS = [
+      // canonical keys (no spaces/underscores)
+      'receiptno', 'dutchieorderid', 'weborderid',
+      'orderid', 'ordernumber', 'orderno'
+    ];
+    const BUD_KEYS = [
+      'helpedby', 'budtender', 'associate', 'employee', 'staff', 'guide', 'agent', 'user', 'username', 'cashier'
+    ];
+    const PROD_KEYS = [
+      'product', 'productname', 'item', 'skuname', 'itemname', 'menuname', 'variant', 'description', 'sku'
+    ];
+
+    function pickHeader(headers, wanted){
+      // wanted should be canonical keys (canon applied)
+      const map = {};
+      headers.forEach((h,i)=> map[canon(h)] = i);
+      for(const w of wanted){ if(map[w] != null) return headers[map[w]]; }
+      // fallback: contains match on canonical strings
+      for(const h of headers){
+        const c = canon(h);
+        if(wanted.some(w => c.includes(w))) return h;
+      }
+      return null;
+    }
+
+    function findHeaderIndex(rows, groups){
+      // groups is an array of arrays of canonical keys. We need at least one hit from each group.
+      const limit = Math.min(rows.length, 20);
+      for(let i=0;i<limit;i++){
+        const headers = (rows[i]||[]).map(toStr);
+        if(!headers.length) continue;
+        const ok = groups.every(g => !!pickHeader(headers, g));
+        if(ok) return i;
+      }
+      return 0;
+    }
+
+    async function readFileToRows(file){
+      if(!file) return [];
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      return XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+    }
+
+    function rowsToObjects(rows){
+      if(!rows.length) return {headers:[], objs:[]};
+      const headers = rows[0].map(toStr);
+      const objs = [];
+      for(let r=1;r<rows.length;r++){
+        const row = rows[r];
+        if(row.every(v => toStr(v) === '')) continue;
+        const obj = {};
+        headers.forEach((h,i)=> obj[h] = toStr(row[i]));
+        objs.push(obj);
+      }
+      return { headers, objs };
+    }
+
+    function detectBrandMatch(name, brandNeedle){
+      return norm(name).includes(norm(brandNeedle));
+    }
+
+    async function run(){
+      statusEl.textContent = 'Working...';
+      resultsArea.innerHTML = '<p class="hint">Analyzing...</p>';
+      dlBtn.disabled = true;
+
+      const [attrRows, dispRows] = await Promise.all([
+        readFileToRows(q('#attrFile').files[0]),
+        readFileToRows(q('#dispFile').files[0])
+      ]);
+
+      const attrHeaderIdx = findHeaderIndex(attrRows, [ORDER_KEYS, BUD_KEYS]);
+      const dispHeaderIdx = findHeaderIndex(dispRows, [ORDER_KEYS, PROD_KEYS]);
+      const attr = rowsToObjects(attrRows.slice(attrHeaderIdx));
+      const disp = rowsToObjects(dispRows.slice(dispHeaderIdx));
+
+      const attrOrderCol = pickHeader(attr.headers, ORDER_KEYS);
+      const attrBudCol = pickHeader(attr.headers, BUD_KEYS);
+      const dispOrderCol = pickHeader(disp.headers, ORDER_KEYS);
+      const dispProdCol = pickHeader(disp.headers, PROD_KEYS);
+
+      if(!attrOrderCol || !attrBudCol || !dispOrderCol || !dispProdCol){
+        const missing = [];
+        if(!attrOrderCol) missing.push('Attributions: order (dutchie_order_id)');
+        if(!attrBudCol) missing.push('Attributions: budtender (helped_by)');
+        if(!dispOrderCol) missing.push('Dispensations: order (ReceiptNo)');
+        if(!dispProdCol) missing.push('Dispensations: product (Product)');
+        resultsArea.innerHTML = '<div>' +
+          '<p class="hint">Missing required columns:</p><ul>' + missing.map(m=>`<li>${m}</li>`).join('') + '</ul>' +
+          `<p class="hint">Detected headers</p>`+
+          `<p class="hint">Attributions: ${attr.headers.join(' | ') || '(none)'}</p>`+
+          `<p class="hint">Dispensations: ${disp.headers.join(' | ') || '(none)'}</p>`+
+          '</div>';
+        statusEl.textContent = '';
+        return;
+      }
+
+      const brand = brandEl.value || 'Foy';
+      const attrObjs = attr.objs.map(r=> ({ order: norm(r[attrOrderCol]), bud: toStr(r[attrBudCol]) }));
+      const dispObjs = disp.objs.map(r=> ({ order: norm(r[dispOrderCol]), prod: toStr(r[dispProdCol]) }));
+
+      const foyOrders = new Set(dispObjs.filter(r=>detectBrandMatch(r.prod, brand)).map(r=>r.order));
+
+      const stats = {};
+      for(const r of attrObjs){
+        if(foyOrders.has(r.order)){
+          stats[r.bud] = (stats[r.bud]||0) + 1;
+        }
+      }
+
+      const out = Object.entries(stats).map(([bud,count])=>({ budtender: bud, foy_orders: count }));
+      out.sort((a,b)=> b.foy_orders - a.foy_orders);
+
+      if(!out.length){
+        resultsArea.innerHTML = '<p class="hint">No matches found for brand.</p>';
+        statusEl.textContent = '';
+        return;
+      }
+
+      let html = '<table><thead><tr><th>Budtender</th><th>Foy Orders</th></tr></thead><tbody>';
+      for(const r of out){
+        html += `<tr><td>${r.budtender}</td><td>${r.foy_orders}</td></tr>`;
+      }
+      html += '</tbody></table>';
+      resultsArea.innerHTML = html;
+
+      const csv = 'Budtender,Foy Orders\n' + out.map(r=>`${r.budtender},${r.foy_orders}`).join('\n');
+      dlBtn.disabled = false;
+      dlBtn.onclick = () => {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'foy_attributions.csv';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      statusEl.textContent = 'Done';
+      setTimeout(()=> statusEl.textContent = '', 1500);
+    }
+
+    runBtn.addEventListener('click', ()=>{
+      run().catch(err=>{
+        console.error(err);
+        resultsArea.innerHTML = `<p class="hint">Error: ${err.message}</p>`;
+        statusEl.textContent = '';
+      });
+    });
+  </script>
+</body>
+</html>
