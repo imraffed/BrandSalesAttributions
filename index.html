@@ -27,7 +27,7 @@
 
     <div class="card">
       <label for="brandFilter">Brand filter</label>
-      <input id="brandFilter" type="text" value="Foy" />
+      <input id="brandFilter" type="text" value="Brand" />
 
       <label for="attrFile">1) Kiosk attributions</label>
       <input id="attrFile" type="file" accept=".csv,.xlsx,.xls" />
@@ -163,7 +163,7 @@
         return;
       }
 
-      const brand = brandEl.value || 'Foy';
+      const brand = brandEl.value || 'Brand';
       const attrObjs = attr.objs.map(r=> ({ order: norm(r[attrOrderCol]), bud: toStr(r[attrBudCol]) }));
       const dispObjs = disp.objs.map(r=> ({ order: norm(r[dispOrderCol]), prod: toStr(r[dispProdCol]) }));
 
