@@ -185,7 +185,7 @@
         return;
       }
 
-      let html = '<table><thead><tr><th>Budtender</th><th>Foy Orders</th></tr></thead><tbody>';
+      let html = '<table><thead><tr><th>Budtender</th><th>Brand Orders</th></tr></thead><tbody>';
       for(const r of out){
         html += `<tr><td>${r.budtender}</td><td>${r.foy_orders}</td></tr>`;
       }
@@ -199,7 +199,7 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'foy_attributions.csv';
+        a.download = 'brand_attributions.csv';
         a.click();
         URL.revokeObjectURL(url);
       };
